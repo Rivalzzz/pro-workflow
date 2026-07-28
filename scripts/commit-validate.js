@@ -3,15 +3,38 @@ const TYPES = ['feat', 'fix', 'refactor', 'test', 'docs', 'chore', 'perf', 'ci',
 const PATTERN = new RegExp(`^(${TYPES.join('|')})(\\([\\w\\-.,/ ]+\\))?!?: .+`);
 const MAX_SUMMARY = 72;
 
-// A real `git … commit` invocation. Anchored to the start of a shell command
-// segment (`^`, `;`, `&`, `|`, newline, `(`/`$(`, backtick) so a quoted mention
-// such as `echo 'git commit'` does not count, and bounded so that `git` and
-// `commit` belong to the same segment (`git log … | grep commit` does not match).
-// The gap before `git` rejects quote characters — that is what excludes quoted
-// mentions — while still allowing a prefix like `sudo ` or `FOO=1 `. The gap
-// between `git` and `commit` allows any flags, including ones that take a
-// separate value (`git -C /path commit`, `git -c user.email=a@b.c commit`).
-const GIT_COMMIT = /(?:^|[\n;&|(`])[^|&;\n'"]*?\bgit\b[^|&;\n]*?\bcommit\b/;
+// A real `git … commit` invocation, i.e. `git` as the command word of a shell
+// segment with `commit` as its subcommand.
+//
+//   (?:^|[\n;&|(`])          start of a command segment, so `echo git commit`
+//                            and `echo 'git commit'` are not invocations
+//   (?:\w+=\S*\s+|sudo…)*    the few prefixes that still leave git the command
+//   git\s+                   the command word itself
+//   (?:-\S+(?:\s+[^-\s]\S*)?\s+)*   only flags, each with an optional value, so
+//                            `git -C /path commit` and `git -c k=v commit` match
+//                            while `git log commit` does not
+const GIT_COMMIT = /(?:^|[\n;&|(`])\s*(?:\w+=\S*\s+|sudo\s+|command\s+)*git\s+(?:-\S+(?:\s+[^-\s]\S*)?\s+)*commit\b/;
+
+// The arguments belonging to that commit: everything after the `commit` verb up
+// to the first shell separator that is not inside quotes, so a later `&& python
+// -m pytest` is not mistaken for the message. A heredoc body may legally contain
+// separators, so once one is opened the arguments run to the end of the command.
+function commitArgs(rest) {
+  let single = false;
+  let double = false;
+  let heredoc = false;
+
+  for (let i = 0; i < rest.length; i++) {
+    const c = rest[i];
+    if (c === '\\' && !single) { i++; continue; }
+    if (c === "'" && !double) { single = !single; continue; }
+    if (c === '"' && !single) { double = !double; continue; }
+    if (single || double) continue;
+    if (c === '<' && rest[i + 1] === '<') { heredoc = true; i++; continue; }
+    if (!heredoc && (c === ';' || c === '&' || c === '|')) return rest.slice(0, i);
+  }
+  return rest;
+}
 
 function readStdin() {
   return new Promise(resolve => {
@@ -34,7 +57,7 @@ function extractMessage(command) {
   // "feat: x"` from being picked up instead of the real one.
   const gitCommit = command.match(GIT_COMMIT);
   if (!gitCommit) return { msg: null, form: 'not-a-commit' };
-  const args = command.slice(gitCommit.index + gitCommit[0].length);
+  const args = commitArgs(command.slice(gitCommit.index + gitCommit[0].length));
 
   const shortFlag = args.match(/(?:^|\s)-m\s+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))/);
   if (shortFlag) {

@@ -49,6 +49,8 @@ describe('commit-validate: commands that are not a git commit', () => {
     ['heredoc sent over ssh', "ssh host <<'EOF'\nuptime\nEOF"],
     ['the word commit only as grep input', 'git log --oneline -5 | grep commit'],
     ['a quoted mention of git commit', "echo 'git commit' && python -m pytest"],
+    ['an unquoted mention of git commit', 'echo git commit -m "bad message not conventional"'],
+    ['commit as an argument to another subcommand', 'git log commit -m "bad message not conventional"'],
   ];
 
   for (const [why, command] of cases) {
@@ -85,6 +87,8 @@ describe('commit-validate: still blocks invalid messages', () => {
     ['amend with a message', 'git commit --amend -m "bad message not conventional"'],
     ['--message= form', 'git commit --message="bad message not conventional"'],
     ['message supplied by heredoc', "git commit -F- <<'EOF'\nbad message not conventional\nEOF"],
+    // A heredoc body may contain shell separators; they must not truncate it.
+    ['heredoc message containing separators', "git commit -F- <<'EOF'\nbad message; not & conventional\nEOF"],
   ];
 
   for (const [why, command] of cases) {
@@ -100,6 +104,11 @@ describe('commit-validate: lets valid commits through', () => {
     ['message read from a file', 'git commit -F /tmp/msg.txt'],
     ['message written in the editor', 'git commit'],
     ['valid commit followed by another command', 'git commit -m "chore: bump" && python -m pytest'],
+    // The message comes from the editor here; the -m belongs to the chained
+    // command, so extraction must stop at the separator rather than read it.
+    ['editor commit chained before a -m command', 'git commit && python -m pytest'],
+    ['editor commit chained before a heredoc', "git commit && cat > f.py <<'EOF'\nimport json\nEOF"],
+    ['a message containing shell separators', 'git commit -m "fix(api): guard a & b; retry"'],
   ];
 
   for (const [why, command] of cases) {
